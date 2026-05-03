@@ -2,11 +2,13 @@ package tun
 
 import (
 	"context"
+	"syscall"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	c "github.com/xtls/xray-core/common/ctx"
 	"github.com/xtls/xray-core/common/errors"
+	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/session"
@@ -14,16 +16,20 @@ import (
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport"
+	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
 )
 
 // Handler is managing object that tie together tun interface, ip stack and dispatch connections to the routing
 type Handler struct {
-	ctx           context.Context
-	config        *Config
-	stack         Stack
-	policyManager policy.Manager
-	dispatcher    routing.Dispatcher
+	ctx             context.Context
+	config          *Config
+	stack           Stack
+	tun             Tun
+	policyManager   policy.Manager
+	dispatcher      routing.Dispatcher
+	tag             string
+	sniffingRequest session.SniffingRequest
 }
 
 // ConnectionHandler interface with the only method that stack is going to push new connections to
@@ -34,27 +40,52 @@ type ConnectionHandler interface {
 // Handler implements ConnectionHandler
 var _ ConnectionHandler = (*Handler)(nil)
 
-func (t *Handler) policy() policy.Session {
-	p := t.policyManager.ForLevel(t.config.UserLevel)
-	return p
-}
-
 // Init the Handler instance with necessary parameters
 func (t *Handler) Init(ctx context.Context, pm policy.Manager, dispatcher routing.Dispatcher) error {
 	var err error
+
+	// Retrieve tag and sniffing config from context (set by AlwaysOnInboundHandler)
+	if inbound := session.InboundFromContext(ctx); inbound != nil {
+		t.tag = inbound.Tag
+	}
+	if content := session.ContentFromContext(ctx); content != nil {
+		t.sniffingRequest = content.SniffingRequest
+	}
 
 	t.ctx = core.ToBackgroundDetachedContext(ctx)
 	t.policyManager = pm
 	t.dispatcher = dispatcher
 
 	tunName := t.config.Name
-	tunOptions := TunOptions{
-		Name: tunName,
-		MTU:  t.config.MTU,
-	}
-	tunInterface, err := NewTun(tunOptions)
+	tunInterface, err := NewTun(t.config)
 	if err != nil {
 		return err
+	}
+
+	if t.config.AutoOutboundsInterface != "" {
+		tunIndex, err := tunInterface.Index()
+		if err != nil {
+			_ = tunInterface.Close()
+			return err
+		}
+		if t.config.AutoOutboundsInterface == "auto" {
+			t.config.AutoOutboundsInterface = ""
+		}
+		updater = &InterfaceUpdater{tunIndex: tunIndex, fixedName: t.config.AutoOutboundsInterface}
+		updater.Update()
+		internet.RegisterDialerController(func(network, address string, c syscall.RawConn) error {
+			iface := updater.Get()
+			if iface == nil {
+				errors.LogInfo(context.Background(), "[tun] falied to set interface > iface == nil")
+				return nil
+			}
+			return c.Control(func(fd uintptr) {
+				err := setinterface(network, address, fd, iface)
+				if err != nil {
+					errors.LogInfoInner(context.Background(), err, "[tun] falied to set interface")
+				}
+			})
+		})
 	}
 
 	errors.LogInfo(t.ctx, tunName, " created")
@@ -84,6 +115,7 @@ func (t *Handler) Init(ctx context.Context, pm policy.Manager, dispatcher routin
 	}
 
 	t.stack = tunStack
+	t.tun = tunInterface
 
 	errors.LogInfo(t.ctx, tunName, " up")
 	return nil
@@ -91,20 +123,38 @@ func (t *Handler) Init(ctx context.Context, pm policy.Manager, dispatcher routin
 
 // HandleConnection pass the connection coming from the ip stack to the routing dispatcher
 func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
-	sid := session.NewID()
-	ctx := c.ContextWithID(t.ctx, sid)
-	errors.LogInfo(ctx, "processing connection from: ", conn.RemoteAddr())
+	// when handling is done with any outcome, always signal back to the incoming connection
+	// to close, send completion packets back to the network, and cleanup
+	defer conn.Close()
 
-	inbound := session.Inbound{}
-	inbound.Name = "tun"
-	inbound.CanSpliceCopy = 1
-	inbound.Source = net.DestinationFromAddr(conn.RemoteAddr())
-	inbound.User = &protocol.MemoryUser{
-		Level: t.config.UserLevel,
+	ctx, cancel := context.WithCancel(t.ctx)
+	defer cancel()
+	ctx = c.ContextWithID(ctx, session.NewID())
+
+	source := net.DestinationFromAddr(conn.RemoteAddr())
+	inbound := session.Inbound{
+		Name:          "tun",
+		Tag:           t.tag,
+		CanSpliceCopy: 3,
+		Source:        source,
+		User: &protocol.MemoryUser{
+			Level: t.config.UserLevel,
+		},
 	}
 
 	ctx = session.ContextWithInbound(ctx, &inbound)
+	ctx = session.ContextWithContent(ctx, &session.Content{
+		SniffingRequest: t.sniffingRequest,
+	})
 	ctx = session.SubContextFromMuxInbound(ctx)
+
+	ctx = log.ContextWithAccessMessage(ctx, &log.AccessMessage{
+		From:   inbound.Source,
+		To:     destination,
+		Status: log.AccessAccepted,
+		Reason: "",
+	})
+	errors.LogInfo(ctx, "processing from ", source, " to ", destination)
 
 	link := &transport.Link{
 		Reader: &buf.TimeoutWrapperReader{Reader: buf.NewReader(conn)},
@@ -112,10 +162,12 @@ func (t *Handler) HandleConnection(conn net.Conn, destination net.Destination) {
 	}
 	if err := t.dispatcher.DispatchLink(ctx, destination, link); err != nil {
 		errors.LogError(ctx, errors.New("connection closed").Base(err))
-		return
 	}
+}
 
-	errors.LogInfo(ctx, "connection completed")
+// Close implements common.Closable.
+func (t *Handler) Close() error {
+	return errors.Combine(t.stack.Close(), t.tun.Close())
 }
 
 // Network implements proxy.Inbound

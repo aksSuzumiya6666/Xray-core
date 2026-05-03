@@ -3,14 +3,11 @@ package router
 import (
 	"context"
 	"regexp"
-	"runtime"
 	"strings"
 
 	"github.com/xtls/xray-core/common/errors"
-	"github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/features/routing"
-	"google.golang.org/protobuf/proto"
 )
 
 type Rule struct {
@@ -18,6 +15,7 @@ type Rule struct {
 	RuleTag   string
 	Balancer  *Balancer
 	Condition Condition
+	Webhook   *WebhookNotifier
 }
 
 func (r *Rule) GetTag() (string, error) {
@@ -75,32 +73,24 @@ func (rr *RoutingRule) BuildCondition() (Condition, error) {
 		conds.Add(&AttributeMatcher{configuredKeys})
 	}
 
-	if len(rr.Geoip) > 0 {
-		geoip := rr.Geoip
-		if runtime.GOOS != "windows" && runtime.GOOS != "wasm" {
-			var err error
-			geoip, err = GetGeoIPList(rr.Geoip)
-			if err != nil {
-				return nil, errors.New("failed to build geoip from mmap").Base(err)
-			}
-		}
-		cond, err := NewIPMatcher(geoip, MatcherAsType_Target)
+	if len(rr.Ip) > 0 {
+		cond, err := NewIPMatcher(rr.Ip, MatcherAsType_Target)
 		if err != nil {
 			return nil, err
 		}
 		conds.Add(cond)
 	}
 
-	if len(rr.SourceGeoip) > 0 {
-		cond, err := NewIPMatcher(rr.SourceGeoip, MatcherAsType_Source)
+	if len(rr.SourceIp) > 0 {
+		cond, err := NewIPMatcher(rr.SourceIp, MatcherAsType_Source)
 		if err != nil {
 			return nil, err
 		}
 		conds.Add(cond)
 	}
 
-	if len(rr.LocalGeoip) > 0 {
-		cond, err := NewIPMatcher(rr.LocalGeoip, MatcherAsType_Local)
+	if len(rr.LocalIp) > 0 {
+		cond, err := NewIPMatcher(rr.LocalIp, MatcherAsType_Local)
 		if err != nil {
 			return nil, err
 		}
@@ -109,21 +99,11 @@ func (rr *RoutingRule) BuildCondition() (Condition, error) {
 	}
 
 	if len(rr.Domain) > 0 {
-		domains := rr.Domain
-		if runtime.GOOS != "windows" && runtime.GOOS != "wasm" {
-			var err error
-			domains, err = GetDomainList(rr.Domain)
-			if err != nil {
-				return nil, errors.New("failed to build domains from mmap").Base(err)
-			}
-		}
-
-		matcher, err := NewMphMatcherGroup(domains)
+		cond, err := NewDomainMatcher(rr.Domain)
 		if err != nil {
-			return nil, errors.New("failed to build domain condition with MphDomainMatcher").Base(err)
+			return nil, err
 		}
-		errors.LogDebug(context.Background(), "MphDomainMatcher is enabled for ", len(domains), " domain rule(s)")
-		conds.Add(matcher)
+		conds.Add(cond)
 	}
 
 	if len(rr.Process) > 0 {
@@ -182,81 +162,4 @@ func (br *BalancingRule) Build(ohm outbound.Manager, dispatcher routing.Dispatch
 	default:
 		return nil, errors.New("unrecognized balancer type")
 	}
-}
-
-func GetGeoIPList(ips []*GeoIP) ([]*GeoIP, error) {
-	geoipList := []*GeoIP{}
-	for _, ip := range ips {
-		if ip.CountryCode != "" {
-			val := strings.Split(ip.CountryCode, "_")
-			fileName := "geoip.dat"
-			if len(val) == 2 {
-				fileName = strings.ToLower(val[0])
-			}
-			bs, err := filesystem.ReadAsset(fileName)
-			if err != nil {
-				return nil, errors.New("failed to load file: ", fileName).Base(err)
-			}
-			bs = filesystem.Find(bs, []byte(ip.CountryCode))
-
-			var geoip GeoIP
-
-			if err := proto.Unmarshal(bs, &geoip); err != nil {
-				return nil, errors.New("failed Unmarshal :").Base(err)
-			}
-			geoipList = append(geoipList, &geoip)
-
-		} else {
-			geoipList = append(geoipList, ip)
-		}
-	}
-	return geoipList, nil
-
-}
-
-func GetDomainList(domains []*Domain) ([]*Domain, error) {
-	domainList := []*Domain{}
-	for _, domain := range domains {
-		val := strings.Split(domain.Value, "_")
-
-		if len(val) >= 2 {
-
-			fileName := val[0]
-			code := val[1]
-
-			bs, err := filesystem.ReadAsset(fileName)
-			if err != nil {
-				return nil, errors.New("failed to load file: ", fileName).Base(err)
-			}
-			bs = filesystem.Find(bs, []byte(code))
-			var geosite GeoSite
-
-			if err := proto.Unmarshal(bs, &geosite); err != nil {
-				return nil, errors.New("failed Unmarshal :").Base(err)
-			}
-
-			// parse attr
-			if len(val) == 3 {
-				siteWithAttr := strings.Split(val[2], ",")
-				attrs := ParseAttrs(siteWithAttr)
-
-				if !attrs.IsEmpty() {
-					filteredDomains := make([]*Domain, 0, len(domains))
-					for _, domain := range geosite.Domain {
-						if attrs.Match(domain) {
-							filteredDomains = append(filteredDomains, domain)
-						}
-					}
-					geosite.Domain = filteredDomains
-				}
-
-			}
-
-			domainList = append(domainList, geosite.Domain...)
-
-		} else {
-			domainList = append(domainList, domain)
-		}
-	}
-	return domainList, nil
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
+	"github.com/xtls/xray-core/common/task"
 	"github.com/xtls/xray-core/common/uuid"
 	"github.com/xtls/xray-core/proxy/vmess"
 	"github.com/xtls/xray-core/proxy/vmess/inbound"
@@ -58,12 +59,14 @@ func (c *VMessDefaultConfig) Build() *inbound.DefaultConfig {
 }
 
 type VMessInboundConfig struct {
-	Users        []json.RawMessage   `json:"clients"`
-	Defaults     *VMessDefaultConfig `json:"default"`
+	Users    []json.RawMessage   `json:"clients"`
+	Defaults *VMessDefaultConfig `json:"default"`
 }
 
 // Build implements Buildable
 func (c *VMessInboundConfig) Build() (proto.Message, error) {
+	errors.PrintNonRemovalDeprecatedFeatureWarning("VMess (with no Forward Secrecy, etc.)", "VLESS Encryption")
+
 	config := &inbound.Config{}
 
 	if c.Defaults != nil {
@@ -71,24 +74,29 @@ func (c *VMessInboundConfig) Build() (proto.Message, error) {
 	}
 
 	config.User = make([]*protocol.User, len(c.Users))
-	for idx, rawData := range c.Users {
+	processUser := func(idx int) error {
+		rawData := c.Users[idx]
 		user := new(protocol.User)
 		if err := json.Unmarshal(rawData, user); err != nil {
-			return nil, errors.New("invalid VMess user").Base(err)
+			return errors.New("invalid VMess user").Base(err)
 		}
 		account := new(VMessAccount)
 		if err := json.Unmarshal(rawData, account); err != nil {
-			return nil, errors.New("invalid VMess user").Base(err)
+			return errors.New("invalid VMess user").Base(err)
 		}
 
 		u, err := uuid.ParseString(account.ID)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		account.ID = u.String()
 
 		user.Account = serial.ToTypedMessage(account.Build())
 		config.User[idx] = user
+		return nil
+	}
+	if err := task.ParallelForN(len(c.Users), processUser); err != nil {
+		return nil, err
 	}
 
 	return config, nil
@@ -113,6 +121,8 @@ type VMessOutboundConfig struct {
 
 // Build implements Buildable
 func (c *VMessOutboundConfig) Build() (proto.Message, error) {
+	errors.PrintNonRemovalDeprecatedFeatureWarning("VMess (with no Forward Secrecy, etc.)", "VLESS Encryption")
+
 	config := new(outbound.Config)
 	if c.Address != nil {
 		c.Receivers = []*VMessOutboundTarget{

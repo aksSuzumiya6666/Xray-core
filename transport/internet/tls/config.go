@@ -281,54 +281,79 @@ func (c *Config) parseServerName() string {
 }
 
 func (r *RandCarrier) verifyPeerCert(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) (err error) {
-	// extract x509 certificates from rawCerts(verifiedChains will be nil if InsecureSkipVerify is true)
+	// extract x509 certificates from rawCerts (verifiedChains will be nil if InsecureSkipVerify is true)
 	certs := make([]*x509.Certificate, len(rawCerts))
 	for i, asn1Data := range rawCerts {
 		certs[i], _ = x509.ParseCertificate(asn1Data)
 	}
+	if len(certs) == 0 {
+		return errors.New("unexpected certs")
+	}
 
 	// directly return success if pinned cert is leaf
-	// or add the CA to RootCAs if pinned cert is CA(and can be used in VerifyPeerCertInNames for Self signed CA)
-	RootCAs := r.RootCAs
+	// or replace RootCAs if pinned cert is CA (and can be used in VerifyPeerCertByName)
+	CAs := r.RootCAs
+	var verifyResult verifyResult
+	var verifiedCert *x509.Certificate
 	if r.PinnedPeerCertSha256 != nil {
-		verifyResult, verifiedCert := verifyChain(certs, r.PinnedPeerCertSha256)
+		verifyResult, verifiedCert = verifyChain(certs, r.PinnedPeerCertSha256)
 		switch verifyResult {
 		case certNotFound:
-			return errors.New("peer cert is unrecognized")
+			return errors.New("peer cert is unrecognized (against pinnedPeerCertSha256)")
 		case foundLeaf:
 			return nil
 		case foundCA:
-			RootCAs = x509.NewCertPool()
-			RootCAs.AddCert(verifiedCert)
+			CAs = x509.NewCertPool()
+			CAs.AddCert(verifiedCert)
 		default:
-			panic("impossible PinnedPeerCertificateSha256 verify result")
+			panic("impossible pinnedPeerCertSha256 verify result")
 		}
 	}
 
-	if r.VerifyPeerCertInNames != nil {
-		if len(r.VerifyPeerCertInNames) > 0 {
-			opts := x509.VerifyOptions{
-				Roots:         RootCAs,
-				CurrentTime:   time.Now(),
-				Intermediates: x509.NewCertPool(),
-			}
-			for _, cert := range certs[1:] {
-				opts.Intermediates.AddCert(cert)
-			}
-			for _, opts.DNSName = range r.VerifyPeerCertInNames {
-				if _, err := certs[0].Verify(opts); err == nil {
-					return nil
-				}
+	if r.VerifyPeerCertByName != nil { // RAW's Dial() may make it empty but not nil
+		opts := x509.VerifyOptions{
+			Roots:         CAs,
+			CurrentTime:   time.Now(),
+			Intermediates: x509.NewCertPool(),
+		}
+		for _, cert := range certs[1:] {
+			opts.Intermediates.AddCert(cert)
+		}
+		for _, opts.DNSName = range r.VerifyPeerCertByName {
+			if _, err := certs[0].Verify(opts); err == nil {
+				return nil
 			}
 		}
+		if verifyResult == foundCA {
+			errors.New("peer cert is invalid (against pinned CA and verifyPeerCertByName)")
+		}
+		return errors.New("peer cert is invalid (against root CAs and verifyPeerCertByName)")
 	}
-	return nil
+
+	if verifyResult == foundCA { // if found CA, we need to verify here
+		opts := x509.VerifyOptions{
+			Roots:         CAs,
+			CurrentTime:   time.Now(),
+			Intermediates: x509.NewCertPool(),
+			DNSName:       r.Config.ServerName,
+		}
+		for _, cert := range certs[1:] {
+			opts.Intermediates.AddCert(cert)
+		}
+		if _, err := certs[0].Verify(opts); err == nil {
+			return nil
+		}
+		return errors.New("peer cert is invalid (against pinned CA and serverName)")
+	}
+
+	return nil // r.PinnedPeerCertSha256==nil && r.verifyPeerCertByName==nil
 }
 
 type RandCarrier struct {
-	RootCAs               *x509.CertPool
-	VerifyPeerCertInNames []string
-	PinnedPeerCertSha256  [][]byte
+	Config               *tls.Config
+	RootCAs              *x509.CertPool
+	VerifyPeerCertByName []string
+	PinnedPeerCertSha256 [][]byte
 }
 
 func (r *RandCarrier) Read(p []byte) (n int, err error) {
@@ -346,30 +371,34 @@ func (c *Config) GetTLSConfig(opts ...Option) *tls.Config {
 		return &tls.Config{
 			ClientSessionCache:     globalSessionCache,
 			RootCAs:                root,
-			InsecureSkipVerify:     false,
-			NextProtos:             nil,
 			SessionTicketsDisabled: true,
 		}
 	}
 
 	randCarrier := &RandCarrier{
-		RootCAs:               root,
-		VerifyPeerCertInNames: slices.Clone(c.VerifyPeerCertInNames),
-		PinnedPeerCertSha256:  c.PinnedPeerCertSha256,
+		RootCAs:              root,
+		VerifyPeerCertByName: slices.Clone(c.VerifyPeerCertByName),
+		PinnedPeerCertSha256: c.PinnedPeerCertSha256,
 	}
 	config := &tls.Config{
+		InsecureSkipVerify:     c.AllowInsecure,
 		Rand:                   randCarrier,
 		ClientSessionCache:     globalSessionCache,
 		RootCAs:                root,
-		InsecureSkipVerify:     c.AllowInsecure,
 		NextProtos:             slices.Clone(c.NextProtocol),
 		SessionTicketsDisabled: !c.EnableSessionResumption,
 		VerifyPeerCertificate:  randCarrier.verifyPeerCert,
 	}
-	if len(c.VerifyPeerCertInNames) > 0 {
+	randCarrier.Config = config
+	if len(c.VerifyPeerCertByName) > 0 {
 		config.InsecureSkipVerify = true
 	} else {
-		randCarrier.VerifyPeerCertInNames = nil
+		randCarrier.VerifyPeerCertByName = nil
+	}
+	if len(c.PinnedPeerCertSha256) > 0 {
+		config.InsecureSkipVerify = true
+	} else {
+		randCarrier.PinnedPeerCertSha256 = nil
 	}
 
 	for _, opt := range opts {
@@ -440,11 +469,7 @@ func (c *Config) GetTLSConfig(opts ...Option) *tls.Config {
 	if len(c.EchConfigList) > 0 || len(c.EchServerKeys) > 0 {
 		err := ApplyECH(c, config)
 		if err != nil {
-			if c.EchForceQuery == "full" {
-				errors.LogError(context.Background(), err)
-			} else {
-				errors.LogInfo(context.Background(), err)
-			}
+			errors.LogError(context.Background(), err)
 		}
 	}
 
@@ -495,11 +520,13 @@ func ConfigFromStreamSettings(settings *internet.MemoryStreamConfig) *Config {
 
 func ParseCurveName(curveNames []string) []tls.CurveID {
 	curveMap := map[string]tls.CurveID{
-		"curvep256":      tls.CurveP256,
-		"curvep384":      tls.CurveP384,
-		"curvep521":      tls.CurveP521,
-		"x25519":         tls.X25519,
-		"x25519mlkem768": tls.X25519MLKEM768,
+		"curvep256":          tls.CurveP256,
+		"curvep384":          tls.CurveP384,
+		"curvep521":          tls.CurveP521,
+		"x25519":             tls.X25519,
+		"x25519mlkem768":     tls.X25519MLKEM768,
+		"secp256r1mlkem768":  tls.SecP256r1MLKEM768,
+		"secp384r1mlkem1024": tls.SecP384r1MLKEM1024,
 	}
 
 	var curveIDs []tls.CurveID
@@ -525,17 +552,21 @@ const (
 	foundCA
 )
 
-func verifyChain(certs []*x509.Certificate, PinnedPeerCertificateSha256 [][]byte) (verifyResult, *x509.Certificate) {
+func verifyChain(certs []*x509.Certificate, pinnedPeerCertSha256 [][]byte) (verifyResult, *x509.Certificate) {
+	leafHash := GenerateCertHash(certs[0])
+	for _, c := range pinnedPeerCertSha256 {
+		if hmac.Equal(leafHash, c) {
+			return foundLeaf, nil
+		}
+	}
+	certs = certs[1:] // skip leaf
 	for _, cert := range certs {
 		certHash := GenerateCertHash(cert)
-		for _, c := range PinnedPeerCertificateSha256 {
+		for _, c := range pinnedPeerCertSha256 {
 			if hmac.Equal(certHash, c) {
 				if cert.IsCA {
 					return foundCA, cert
-				} else {
-					return foundLeaf, cert
 				}
-
 			}
 		}
 	}

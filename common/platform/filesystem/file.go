@@ -1,12 +1,10 @@
-//go:build !windows && !wasm
-
 package filesystem
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/platform"
@@ -19,29 +17,6 @@ var NewFileReader FileReaderFunc = func(path string) (io.ReadCloser, error) {
 }
 
 func ReadFile(path string) ([]byte, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	stat, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-
-	size := stat.Size()
-	if size == 0 {
-		return []byte{}, nil
-	}
-
-	// use mmap to save RAM
-	bs, err := syscall.Mmap(int(file.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
-	if err == nil {
-		return bs, nil
-	}
-
-	// fallback
 	reader, err := NewFileReader(path)
 	if err != nil {
 		return nil, err
@@ -52,7 +27,48 @@ func ReadFile(path string) ([]byte, error) {
 }
 
 func ReadAsset(file string) ([]byte, error) {
-	return ReadFile(platform.GetAssetLocation(file))
+	path, _, err := getAssetFileLocation(file)
+	if err != nil {
+		return nil, err
+	}
+	return ReadFile(path)
+}
+
+func OpenAsset(file string) (io.ReadCloser, error) {
+	path, _, err := getAssetFileLocation(file)
+	if err != nil {
+		return nil, err
+	}
+	return NewFileReader(path)
+}
+
+func StatAsset(file string) (os.FileInfo, error) {
+	_, info, err := getAssetFileLocation(file)
+	return info, err
+}
+
+func ResolveAsset(file string) (string, error) {
+	path, _, err := getAssetFileLocation(file)
+	return path, err
+}
+
+func getAssetFileLocation(file string) (string, os.FileInfo, error) {
+	if !filepath.IsLocal(file) || file == "." {
+		return "", nil, errors.New("asset path must stay in asset directory")
+	}
+	local, err := filepath.Localize(file)
+	if err != nil {
+		return "", nil, err
+	}
+	path := platform.GetAssetLocation(local)
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil, errors.New("asset is not a regular file")
+	}
+	return path, info, nil
 }
 
 func ReadCert(file string) ([]byte, error) {

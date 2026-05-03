@@ -36,6 +36,8 @@ func TestSimpleTLSConnection(t *testing.T) {
 	common.Must(err)
 	defer tcpServer.Close()
 
+	ct, ctHash := cert.MustGenerate(nil, cert.CommonName("localhost"))
+
 	userID := protocol.NewID(uuid.New())
 	serverPort := tcp.PickPort()
 	serverConfig := &core.Config{
@@ -48,7 +50,7 @@ func TestSimpleTLSConnection(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								Certificate: []*tls.Certificate{tls.ParseCertificate(cert.MustGenerate(nil))},
+								Certificate: []*tls.Certificate{tls.ParseCertificate(ct)},
 							}),
 						},
 					},
@@ -66,7 +68,9 @@ func TestSimpleTLSConnection(t *testing.T) {
 		},
 		Outbound: []*core.OutboundHandlerConfig{
 			{
-				ProxySettings: serial.ToTypedMessage(&freedom.Config{}),
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					FinalRules: []*freedom.FinalRuleConfig{{Action: freedom.RuleAction_Allow}},
+				}),
 			},
 		},
 	}
@@ -104,7 +108,7 @@ func TestSimpleTLSConnection(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								AllowInsecure: true,
+								PinnedPeerCertSha256: [][]byte{ctHash[:]},
 							}),
 						},
 					},
@@ -177,7 +181,9 @@ func TestAutoIssuingCertificate(t *testing.T) {
 		},
 		Outbound: []*core.OutboundHandlerConfig{
 			{
-				ProxySettings: serial.ToTypedMessage(&freedom.Config{}),
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					FinalRules: []*freedom.FinalRuleConfig{{Action: freedom.RuleAction_Allow}},
+				}),
 			},
 		},
 	}
@@ -247,6 +253,8 @@ func TestTLSOverKCP(t *testing.T) {
 	common.Must(err)
 	defer tcpServer.Close()
 
+	ct, ctHash := cert.MustGenerate(nil, cert.CommonName("localhost"))
+
 	userID := protocol.NewID(uuid.New())
 	serverPort := udp.PickPort()
 	serverConfig := &core.Config{
@@ -260,7 +268,7 @@ func TestTLSOverKCP(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								Certificate: []*tls.Certificate{tls.ParseCertificate(cert.MustGenerate(nil))},
+								Certificate: []*tls.Certificate{tls.ParseCertificate(ct)},
 							}),
 						},
 					},
@@ -278,7 +286,9 @@ func TestTLSOverKCP(t *testing.T) {
 		},
 		Outbound: []*core.OutboundHandlerConfig{
 			{
-				ProxySettings: serial.ToTypedMessage(&freedom.Config{}),
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					FinalRules: []*freedom.FinalRuleConfig{{Action: freedom.RuleAction_Allow}},
+				}),
 			},
 		},
 	}
@@ -317,7 +327,7 @@ func TestTLSOverKCP(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								AllowInsecure: true,
+								PinnedPeerCertSha256: [][]byte{ctHash[:]},
 							}),
 						},
 					},
@@ -343,6 +353,8 @@ func TestTLSOverWebSocket(t *testing.T) {
 	common.Must(err)
 	defer tcpServer.Close()
 
+	ct, ctHash := cert.MustGenerate(nil, cert.CommonName("localhost"))
+
 	userID := protocol.NewID(uuid.New())
 	serverPort := tcp.PickPort()
 	serverConfig := &core.Config{
@@ -356,7 +368,7 @@ func TestTLSOverWebSocket(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								Certificate: []*tls.Certificate{tls.ParseCertificate(cert.MustGenerate(nil))},
+								Certificate: []*tls.Certificate{tls.ParseCertificate(ct)},
 							}),
 						},
 					},
@@ -374,7 +386,9 @@ func TestTLSOverWebSocket(t *testing.T) {
 		},
 		Outbound: []*core.OutboundHandlerConfig{
 			{
-				ProxySettings: serial.ToTypedMessage(&freedom.Config{}),
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					FinalRules: []*freedom.FinalRuleConfig{{Action: freedom.RuleAction_Allow}},
+				}),
 			},
 		},
 	}
@@ -419,7 +433,7 @@ func TestTLSOverWebSocket(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								AllowInsecure: true,
+								PinnedPeerCertSha256: [][]byte{ctHash[:]},
 							}),
 						},
 					},
@@ -449,6 +463,8 @@ func TestGRPC(t *testing.T) {
 	common.Must(err)
 	defer tcpServer.Close()
 
+	ct, ctHash := cert.MustGenerate(nil, cert.CommonName("localhost"))
+
 	userID := protocol.NewID(uuid.New())
 	serverPort := tcp.PickPort()
 	serverConfig := &core.Config{
@@ -468,7 +484,7 @@ func TestGRPC(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								Certificate: []*tls.Certificate{tls.ParseCertificate(cert.MustGenerate(nil))},
+								Certificate: []*tls.Certificate{tls.ParseCertificate(ct)},
 							}),
 						},
 					},
@@ -486,7 +502,9 @@ func TestGRPC(t *testing.T) {
 		},
 		Outbound: []*core.OutboundHandlerConfig{
 			{
-				ProxySettings: serial.ToTypedMessage(&freedom.Config{}),
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					FinalRules: []*freedom.FinalRuleConfig{{Action: freedom.RuleAction_Allow}},
+				}),
 			},
 		},
 	}
@@ -531,7 +549,7 @@ func TestGRPC(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								AllowInsecure: true,
+								PinnedPeerCertSha256: [][]byte{ctHash[:]},
 							}),
 						},
 					},
@@ -561,6 +579,8 @@ func TestGRPCMultiMode(t *testing.T) {
 	common.Must(err)
 	defer tcpServer.Close()
 
+	ct, ctHash := cert.MustGenerate(nil, cert.CommonName("localhost"))
+
 	userID := protocol.NewID(uuid.New())
 	serverPort := tcp.PickPort()
 	serverConfig := &core.Config{
@@ -580,7 +600,7 @@ func TestGRPCMultiMode(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								Certificate: []*tls.Certificate{tls.ParseCertificate(cert.MustGenerate(nil))},
+								Certificate: []*tls.Certificate{tls.ParseCertificate(ct)},
 							}),
 						},
 					},
@@ -598,7 +618,9 @@ func TestGRPCMultiMode(t *testing.T) {
 		},
 		Outbound: []*core.OutboundHandlerConfig{
 			{
-				ProxySettings: serial.ToTypedMessage(&freedom.Config{}),
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					FinalRules: []*freedom.FinalRuleConfig{{Action: freedom.RuleAction_Allow}},
+				}),
 			},
 		},
 	}
@@ -643,7 +665,7 @@ func TestGRPCMultiMode(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								AllowInsecure: true,
+								PinnedPeerCertSha256: [][]byte{ctHash[:]},
 							}),
 						},
 					},
@@ -672,7 +694,7 @@ func TestSimpleTLSConnectionPinned(t *testing.T) {
 	dest, err := tcpServer.Start()
 	common.Must(err)
 	defer tcpServer.Close()
-	certificateDer := cert.MustGenerate(nil)
+	certificateDer, _ := cert.MustGenerate(nil)
 	certificate := tls.ParseCertificate(certificateDer)
 	certHash := tls.GenerateCertHash(certificateDer.Certificate)
 	userID := protocol.NewID(uuid.New())
@@ -705,7 +727,9 @@ func TestSimpleTLSConnectionPinned(t *testing.T) {
 		},
 		Outbound: []*core.OutboundHandlerConfig{
 			{
-				ProxySettings: serial.ToTypedMessage(&freedom.Config{}),
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					FinalRules: []*freedom.FinalRuleConfig{{Action: freedom.RuleAction_Allow}},
+				}),
 			},
 		},
 	}
@@ -743,7 +767,6 @@ func TestSimpleTLSConnectionPinned(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								AllowInsecure:        true,
 								PinnedPeerCertSha256: [][]byte{certHash},
 							}),
 						},
@@ -769,7 +792,7 @@ func TestSimpleTLSConnectionPinnedWrongCert(t *testing.T) {
 	dest, err := tcpServer.Start()
 	common.Must(err)
 	defer tcpServer.Close()
-	certificateDer := cert.MustGenerate(nil)
+	certificateDer, _ := cert.MustGenerate(nil)
 	certificate := tls.ParseCertificate(certificateDer)
 	certHash := tls.GenerateCertHash(certificateDer.Certificate)
 	certHash[1] += 1
@@ -803,7 +826,9 @@ func TestSimpleTLSConnectionPinnedWrongCert(t *testing.T) {
 		},
 		Outbound: []*core.OutboundHandlerConfig{
 			{
-				ProxySettings: serial.ToTypedMessage(&freedom.Config{}),
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					FinalRules: []*freedom.FinalRuleConfig{{Action: freedom.RuleAction_Allow}},
+				}),
 			},
 		},
 	}
@@ -841,7 +866,6 @@ func TestSimpleTLSConnectionPinnedWrongCert(t *testing.T) {
 						SecurityType: serial.GetMessageType(&tls.Config{}),
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
-								AllowInsecure:        true,
 								PinnedPeerCertSha256: [][]byte{certHash},
 							}),
 						},
@@ -867,7 +891,7 @@ func TestUTLSConnectionPinned(t *testing.T) {
 	dest, err := tcpServer.Start()
 	common.Must(err)
 	defer tcpServer.Close()
-	certificateDer := cert.MustGenerate(nil)
+	certificateDer, _ := cert.MustGenerate(nil)
 	certificate := tls.ParseCertificate(certificateDer)
 	certHash := tls.GenerateCertHash(certificateDer.Certificate)
 	userID := protocol.NewID(uuid.New())
@@ -900,7 +924,9 @@ func TestUTLSConnectionPinned(t *testing.T) {
 		},
 		Outbound: []*core.OutboundHandlerConfig{
 			{
-				ProxySettings: serial.ToTypedMessage(&freedom.Config{}),
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					FinalRules: []*freedom.FinalRuleConfig{{Action: freedom.RuleAction_Allow}},
+				}),
 			},
 		},
 	}
@@ -939,7 +965,6 @@ func TestUTLSConnectionPinned(t *testing.T) {
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
 								Fingerprint:          "random",
-								AllowInsecure:        true,
 								PinnedPeerCertSha256: [][]byte{certHash},
 							}),
 						},
@@ -965,7 +990,7 @@ func TestUTLSConnectionPinnedWrongCert(t *testing.T) {
 	dest, err := tcpServer.Start()
 	common.Must(err)
 	defer tcpServer.Close()
-	certificateDer := cert.MustGenerate(nil)
+	certificateDer, _ := cert.MustGenerate(nil)
 	certificate := tls.ParseCertificate(certificateDer)
 	certHash := tls.GenerateCertHash(certificateDer.Certificate)
 	certHash[1] += 1
@@ -999,7 +1024,9 @@ func TestUTLSConnectionPinnedWrongCert(t *testing.T) {
 		},
 		Outbound: []*core.OutboundHandlerConfig{
 			{
-				ProxySettings: serial.ToTypedMessage(&freedom.Config{}),
+				ProxySettings: serial.ToTypedMessage(&freedom.Config{
+					FinalRules: []*freedom.FinalRuleConfig{{Action: freedom.RuleAction_Allow}},
+				}),
 			},
 		},
 	}
@@ -1038,7 +1065,6 @@ func TestUTLSConnectionPinnedWrongCert(t *testing.T) {
 						SecuritySettings: []*serial.TypedMessage{
 							serial.ToTypedMessage(&tls.Config{
 								Fingerprint:          "random",
-								AllowInsecure:        true,
 								PinnedPeerCertSha256: [][]byte{certHash},
 							}),
 						},
